@@ -1823,6 +1823,7 @@ int ecp_gen_keypair( ecp_group *grp, mpi *d, ecp_point *Q,
         MPI_CHK( mpi_fill_random( d, n_size, f_rng, p_rng ) );
 
         /* Make sure the most significant bit is nbits */
+        // XXX why shift here!?!
         b = mpi_msb( d ) - 1; /* mpi_msb is one-based */
         if( b > grp->nbits )
             MPI_CHK( mpi_shift_r( d, b - grp->nbits ) );

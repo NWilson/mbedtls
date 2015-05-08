@@ -97,10 +97,6 @@
 #include "polarssl/hmac_drbg.h"
 #endif
 
-#if defined(POLARSSL_MD_C)
-#include "polarssl/md.h"
-#endif
-
 #if defined(POLARSSL_MD2_C)
 #include "polarssl/md2.h"
 #endif
@@ -111,6 +107,10 @@
 
 #if defined(POLARSSL_MD5_C)
 #include "polarssl/md5.h"
+#endif
+
+#if defined(POLARSSL_MD_C)
+#include "polarssl/md.h"
 #endif
 
 #if defined(POLARSSL_NET_C)
@@ -133,16 +133,16 @@
 #include "polarssl/pem.h"
 #endif
 
-#if defined(POLARSSL_PK_C)
-#include "polarssl/pk.h"
-#endif
-
 #if defined(POLARSSL_PKCS12_C)
 #include "polarssl/pkcs12.h"
 #endif
 
 #if defined(POLARSSL_PKCS5_C)
 #include "polarssl/pkcs5.h"
+#endif
+
+#if defined(POLARSSL_PK_C)
+#include "polarssl/pk.h"
 #endif
 
 #if defined(POLARSSL_RIPEMD160_C)
@@ -295,6 +295,28 @@ void polarssl_strerror( int ret, char *buf, size_t buflen )
             polarssl_snprintf( buf, buflen, "PEM - Bad input parameters to function" );
 #endif /* POLARSSL_PEM_PARSE_C || POLARSSL_PEM_WRITE_C */
 
+#if defined(POLARSSL_PKCS12_C)
+        if( use_ret == -(POLARSSL_ERR_PKCS12_BAD_INPUT_DATA) )
+            polarssl_snprintf( buf, buflen, "PKCS12 - Bad input parameters to function" );
+        if( use_ret == -(POLARSSL_ERR_PKCS12_FEATURE_UNAVAILABLE) )
+            polarssl_snprintf( buf, buflen, "PKCS12 - Feature not available, e.g. unsupported encryption scheme" );
+        if( use_ret == -(POLARSSL_ERR_PKCS12_PBE_INVALID_FORMAT) )
+            polarssl_snprintf( buf, buflen, "PKCS12 - PBE ASN.1 data not as expected" );
+        if( use_ret == -(POLARSSL_ERR_PKCS12_PASSWORD_MISMATCH) )
+            polarssl_snprintf( buf, buflen, "PKCS12 - Given private key password does not allow for correct decryption" );
+#endif /* POLARSSL_PKCS12_C */
+
+#if defined(POLARSSL_PKCS5_C)
+        if( use_ret == -(POLARSSL_ERR_PKCS5_BAD_INPUT_DATA) )
+            polarssl_snprintf( buf, buflen, "PKCS5 - Bad input parameters to function" );
+        if( use_ret == -(POLARSSL_ERR_PKCS5_INVALID_FORMAT) )
+            polarssl_snprintf( buf, buflen, "PKCS5 - Unexpected ASN.1 data" );
+        if( use_ret == -(POLARSSL_ERR_PKCS5_FEATURE_UNAVAILABLE) )
+            polarssl_snprintf( buf, buflen, "PKCS5 - Requested encryption or digest alg not available" );
+        if( use_ret == -(POLARSSL_ERR_PKCS5_PASSWORD_MISMATCH) )
+            polarssl_snprintf( buf, buflen, "PKCS5 - Given private key password does not allow for correct decryption" );
+#endif /* POLARSSL_PKCS5_C */
+
 #if defined(POLARSSL_PK_C)
         if( use_ret == -(POLARSSL_ERR_PK_MALLOC_FAILED) )
             polarssl_snprintf( buf, buflen, "PK - Memory alloation failed" );
@@ -326,28 +348,6 @@ void polarssl_strerror( int ret, char *buf, size_t buflen )
             polarssl_snprintf( buf, buflen, "PK - The signature is valid but its length is less than expected" );
 #endif /* POLARSSL_PK_C */
 
-#if defined(POLARSSL_PKCS12_C)
-        if( use_ret == -(POLARSSL_ERR_PKCS12_BAD_INPUT_DATA) )
-            polarssl_snprintf( buf, buflen, "PKCS12 - Bad input parameters to function" );
-        if( use_ret == -(POLARSSL_ERR_PKCS12_FEATURE_UNAVAILABLE) )
-            polarssl_snprintf( buf, buflen, "PKCS12 - Feature not available, e.g. unsupported encryption scheme" );
-        if( use_ret == -(POLARSSL_ERR_PKCS12_PBE_INVALID_FORMAT) )
-            polarssl_snprintf( buf, buflen, "PKCS12 - PBE ASN.1 data not as expected" );
-        if( use_ret == -(POLARSSL_ERR_PKCS12_PASSWORD_MISMATCH) )
-            polarssl_snprintf( buf, buflen, "PKCS12 - Given private key password does not allow for correct decryption" );
-#endif /* POLARSSL_PKCS12_C */
-
-#if defined(POLARSSL_PKCS5_C)
-        if( use_ret == -(POLARSSL_ERR_PKCS5_BAD_INPUT_DATA) )
-            polarssl_snprintf( buf, buflen, "PKCS5 - Bad input parameters to function" );
-        if( use_ret == -(POLARSSL_ERR_PKCS5_INVALID_FORMAT) )
-            polarssl_snprintf( buf, buflen, "PKCS5 - Unexpected ASN.1 data" );
-        if( use_ret == -(POLARSSL_ERR_PKCS5_FEATURE_UNAVAILABLE) )
-            polarssl_snprintf( buf, buflen, "PKCS5 - Requested encryption or digest alg not available" );
-        if( use_ret == -(POLARSSL_ERR_PKCS5_PASSWORD_MISMATCH) )
-            polarssl_snprintf( buf, buflen, "PKCS5 - Given private key password does not allow for correct decryption" );
-#endif /* POLARSSL_PKCS5_C */
-
 #if defined(POLARSSL_RSA_C)
         if( use_ret == -(POLARSSL_ERR_RSA_BAD_INPUT_DATA) )
             polarssl_snprintf( buf, buflen, "RSA - Bad input parameters to function" );
@@ -356,7 +356,7 @@ void polarssl_strerror( int ret, char *buf, size_t buflen )
         if( use_ret == -(POLARSSL_ERR_RSA_KEY_GEN_FAILED) )
             polarssl_snprintf( buf, buflen, "RSA - Something failed during generation of a key" );
         if( use_ret == -(POLARSSL_ERR_RSA_KEY_CHECK_FAILED) )
-            polarssl_snprintf( buf, buflen, "RSA - Key failed to pass the libraries validity check" );
+            polarssl_snprintf( buf, buflen, "RSA - Key failed to pass the library's validity check" );
         if( use_ret == -(POLARSSL_ERR_RSA_PUBLIC_FAILED) )
             polarssl_snprintf( buf, buflen, "RSA - The public key operation failed" );
         if( use_ret == -(POLARSSL_ERR_RSA_PRIVATE_FAILED) )

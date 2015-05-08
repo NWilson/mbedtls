@@ -247,9 +247,10 @@ static int x509_get_ns_cert_type( unsigned char **p,
 
 static int x509_get_key_usage( unsigned char **p,
                                const unsigned char *end,
-                               unsigned char *key_usage)
+                               unsigned int *key_usage)
 {
     int ret;
+    size_t i;
     x509_bitstring bs = { 0, 0, NULL };
 
     if( ( ret = asn1_get_bitstring( p, end, &bs ) ) != 0 )
@@ -260,7 +261,11 @@ static int x509_get_key_usage( unsigned char **p,
                 POLARSSL_ERR_ASN1_INVALID_LENGTH );
 
     /* Get actual bitstring */
-    *key_usage = *bs.p;
+    *key_usage = 0;
+    for( i = 0; i < bs.len && i < sizeof(unsigned int); ++i )
+    {
+        *key_usage |= bs.p[i] << (8*i);
+    }
     return( 0 );
 }
 
@@ -1203,7 +1208,7 @@ static int x509_info_cert_type( char **buf, size_t *size,
         PRINT_ITEM( name );
 
 static int x509_info_key_usage( char **buf, size_t *size,
-                                unsigned char key_usage )
+                                unsigned int key_usage )
 {
     int ret;
     size_t n = *size;
@@ -1437,7 +1442,7 @@ int x509_crt_verify_info( char *buf, size_t size, const char *prefix,
 int x509_crt_check_key_usage( const x509_crt *crt, int usage )
 {
     if( ( crt->ext_types & EXT_KEY_USAGE ) != 0 &&
-        ( crt->key_usage & usage ) != usage )
+        ( crt->key_usage & (unsigned int)usage ) != (unsigned int)usage )
         return( POLARSSL_ERR_X509_BAD_INPUT_DATA );
 
     return( 0 );

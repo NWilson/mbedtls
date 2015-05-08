@@ -110,6 +110,8 @@
 #define KU_KEY_AGREEMENT                (0x08)  /* bit 4 */
 #define KU_KEY_CERT_SIGN                (0x04)  /* bit 5 */
 #define KU_CRL_SIGN                     (0x02)  /* bit 6 */
+#define KU_ENCIPHER_ONLY                (0x01)  /* bit 7 */
+#define KU_DECIPHER_ONLY              (0x8000)  /* bit 8 */
 
 /*
  * Netscape certificate types
@@ -157,6 +159,14 @@
 #define X509_FORMAT_PEM                 2
 
 #define X509_MAX_DN_NAME_SIZE         256 /**< Maximum value size of a DN entry */
+
+/*
+ * X.500 name printing options
+ */
+#define X500_NAME_SPACE                 (1 << 0)   /** Print spaces between components */
+#define X500_NAME_OIDS                  (1 << 1)   /** Print names as OIDs */
+#define X500_NAME_REV                   (1 << 2)   /** Print RDN components in reverse order */
+#define X500_NAME_RFC2253        (X500_NAME_REV)   /** Print using RFC2253 formatting */
 
 #ifdef __cplusplus
 extern "C" {
@@ -215,6 +225,22 @@ x509_time;
  *                 case of an error.
  */
 int x509_dn_gets( char *buf, size_t size, const x509_name *dn );
+
+/**
+ * \brief          Store the certificate DN in printable form into buf;
+ *                 no more than size characters will be written.
+ *
+ * \param buf      Buffer to write to
+ * \param size     Maximum size of buffer
+ * \param dn       The X509 name to represent
+ * \param flags    One or more of X500_NAME_SPACE, X500_NAME_OIDS, and
+ *                 X500_NAME_REV
+ *
+ * \return         The amount of data written to the buffer, or -1 in
+ *                 case of an error.
+ */
+int x509_dn_gets_ext( char *buf, size_t size, const x509_name *dn,
+                      int flags );
 
 /**
  * \brief          Store the certificate serial in printable form into buf;

@@ -449,7 +449,7 @@ int x509_get_name( unsigned char **p, const unsigned char *end,
             if( *p == end_set )
                 break;
 
-            /* Mark this item as being only one in a set */
+            /* Mark this item as being not the only one in a set */
             cur->next_merged = 1;
 
             cur->next = polarssl_malloc( sizeof( x509_name ) );
@@ -666,6 +666,198 @@ int x509_get_ext( unsigned char **p, const unsigned char *end,
     return( 0 );
 }
 
+#define POLARSSL_ERR_DEBUG_BUF_TOO_SMALL    -2
+
+/*
+ * TODO The code is full of weird uses of polarssl_snprintf, SAFE_SNPRINTF()
+ *      macros copy-and-pasted randomly into files that use them... :(
+ *      string_builder_context should go in a header and get used by all the
+ *      places that need to print to buffers, rather than having copy-and-paste
+ *      snippets of code which is a) platform-specific (Visual Studio
+ *      workarounds) and b) delicate and potentially important for security.
+ *      A maintenance nightmare!
+ */
+typedef struct _string_builder_context
+{
+  char *buf;
+  size_t remaining_space, written;
+}
+string_builder_context;
+
+static void string_builder_init( string_builder_context *builder, char* buf,
+                                 size_t buf_size )
+{
+    builder->buf = buf;
+    builder->remaining_space = buf_size;
+    builder->written = 0;
+    if( builder->remaining_space > 0 )
+        *builder->buf = '\0';
+}
+
+static int string_builder_append( string_builder_context *builder,
+                                  const char* string, int maxLen )
+{
+    size_t len, space;
+
+    if( maxLen >= 0 )
+    {
+        for( len = 0; len < (size_t)maxLen && string[len]; ++len )
+            ;
+    }
+    else
+    {
+        len = strlen( string );
+    }
+    space = len + 1 < builder->remaining_space ? len + 1
+                                               : builder->remaining_space;
+    if( space > 1 )
+    {
+        memcpy( builder->buf, string, space - 1 );
+        builder->remaining_space -= space - 1;
+        builder->buf += space - 1;
+    }
+    builder->written += len;
+    if( builder->remaining_space > 0 )
+        *builder->buf = '\0';
+    return( len + 1 > space ? -1 : 0 );
+}
+
+static int string_builder_append_char( string_builder_context *builder,
+                                       char c )
+{
+    builder->written += 1;
+    if( builder->remaining_space < 1 )
+        return -1;
+    *builder->buf = c;
+    ++builder->buf;
+    *builder->buf = '\0';
+    builder->remaining_space -= 1;
+    return 0;
+}
+
+static void string_builder_skip( string_builder_context *builder, size_t bytes )
+{
+    builder->buf += bytes;
+    builder->written += bytes;
+    builder->remaining_space -= bytes;
+}
+
+int x509_dn_gets( char *buf, size_t size, const x509_name *dn )
+{
+    /* Return the format that PolarSSL has historically returned, which is
+     * similar to the non-standard OpenSSL's X509_NAME_oneline() uses. */
+    return x509_dn_gets_ext( buf, size, dn, X500_NAME_SPACE );
+}
+
+static int x509_print_rdn( string_builder_context *builder,
+                           const x509_name *name, int first, int merge,
+                           int opt_spc, int opt_oids )
+{
+    int ret;
+    const char *short_name = NULL;
+
+    if( !first )
+    {
+        string_builder_append( builder,
+                               merge ? (opt_spc ? " + " : "+")
+                                     : (opt_spc ? ", " : ","),
+                               -1);
+    }
+
+    if( !opt_oids &&
+        oid_get_attr_short_name( &name->oid, &short_name ) == 0 )
+    {
+        string_builder_append( builder, short_name, -1 );
+        string_builder_append_char( builder, '=' );
+    }
+    else
+    {
+        ret = oid_get_numeric_string( builder->buf, builder->remaining_space,
+                                      &name->oid );
+        if( ret < 0 )
+            return -1;
+        string_builder_skip( builder, ret );
+        string_builder_append_char( builder, '=' );
+    }
+
+    /*
+     * TODO We need:
+     *  1) A method for getting the UTF-8 encoded value of an ASN.1 string
+     *     (How does PolarSSL not have this already!?!?)
+     *  2) Escape the string here - #xxxxxx for ASN.1 values that don't
+     *     have a UTF-8 representation, and a backslash in front of: ,+"\<>;
+     */
+    string_builder_append( builder, (const char*)name->val.p,
+                           name->val.len );
+
+    return 0;
+}
+
+/*
+ * Store the name in printable form into buf; no more
+ * than size characters will be written
+ */
+int x509_dn_gets_ext( char *buf, size_t size, const x509_name *dn,
+                      int flags )
+{
+    int opt_spc, opt_oids, opt_rev;
+    unsigned char merge = 0;
+    const x509_name *name, *prev_name;
+    string_builder_context builder;
+
+    name = dn;
+
+    string_builder_init( &builder, buf, size );
+
+    opt_spc = flags & X500_NAME_SPACE;
+    opt_oids = flags & X500_NAME_OIDS;
+    opt_rev = flags & X500_NAME_REV;
+
+    if( !opt_rev )
+    {
+        while( name != NULL )
+        {
+            if( !name->oid.p )
+            {
+                name = name->next;
+                continue;
+            }
+
+            if( x509_print_rdn( &builder, name, name == dn, merge, opt_spc,
+                                opt_oids ) < 0)
+                return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL );
+
+            merge = name->next_merged;
+            name = name->next;
+        }
+    }
+    else
+    {
+        prev_name = NULL;
+        while( prev_name != dn )
+        {
+            for( name = dn; name->next != prev_name; name = name->next )
+              ;
+
+            if( !name->oid.p )
+            {
+                prev_name = name;
+                continue;
+            }
+
+            if( x509_print_rdn( &builder, name, name->next == NULL,
+                                name->next_merged, opt_spc, opt_oids ) < 0)
+                return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL );
+
+            prev_name = name;
+        }
+    }
+
+    if( builder.remaining_space == 0 )
+        return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL );
+    return( (int)builder.written );
+}
+
 #if defined(_MSC_VER) && !defined snprintf && !defined(EFIX64) && \
     !defined(EFI32)
 #include <stdarg.h>
@@ -673,6 +865,7 @@ int x509_get_ext( unsigned char **p, const unsigned char *end,
 #if !defined vsnprintf
 #define vsnprintf _vsnprintf
 #endif // vsnprintf
+#define POLARSSL_ERR_DEBUG_BUF_TOO_SMALL    -2
 
 /*
  * Windows _snprintf and _vsnprintf are not compatible to linux versions.
@@ -680,7 +873,7 @@ int x509_get_ext( unsigned char **p, const unsigned char *end,
  *
  * This fuction tries to 'fix' this by at least suggesting enlarging the
  * size by 20.
- */
+  */
 static int compat_snprintf( char *str, size_t size, const char *format, ... )
 {
     va_list ap;
@@ -697,12 +890,8 @@ static int compat_snprintf( char *str, size_t size, const char *format, ... )
         return( (int) size + 20 );
 
     return( res );
-}
-
 #define snprintf compat_snprintf
 #endif /* _MSC_VER && !snprintf && !EFIX64 && !EFI32 */
-
-#define POLARSSL_ERR_DEBUG_BUF_TOO_SMALL    -2
 
 #define SAFE_SNPRINTF()                             \
 {                                                   \
@@ -716,68 +905,6 @@ static int compat_snprintf( char *str, size_t size, const char *format, ... )
                                                     \
     n -= (unsigned int) ret;                        \
     p += (unsigned int) ret;                        \
-}
-
-/*
- * Store the name in printable form into buf; no more
- * than size characters will be written
- */
-int x509_dn_gets( char *buf, size_t size, const x509_name *dn )
-{
-    int ret;
-    size_t i, n;
-    unsigned char c, merge = 0;
-    const x509_name *name;
-    const char *short_name = NULL;
-    char s[X509_MAX_DN_NAME_SIZE], *p;
-
-    memset( s, 0, sizeof( s ) );
-
-    name = dn;
-    p = buf;
-    n = size;
-
-    while( name != NULL )
-    {
-        if( !name->oid.p )
-        {
-            name = name->next;
-            continue;
-        }
-
-        if( name != dn )
-        {
-            ret = polarssl_snprintf( p, n, merge ? " + " : ", " );
-            SAFE_SNPRINTF();
-        }
-
-        ret = oid_get_attr_short_name( &name->oid, &short_name );
-
-        if( ret == 0 )
-            ret = polarssl_snprintf( p, n, "%s=", short_name );
-        else
-            ret = polarssl_snprintf( p, n, "\?\?=" );
-        SAFE_SNPRINTF();
-
-        for( i = 0; i < name->val.len; i++ )
-        {
-            if( i >= sizeof( s ) - 1 )
-                break;
-
-            c = name->val.p[i];
-            if( c < 32 || c == 127 || ( c > 128 && c < 160 ) )
-                 s[i] = '?';
-            else s[i] = c;
-        }
-        s[i] = '\0';
-        ret = polarssl_snprintf( p, n, "%s", s );
-        SAFE_SNPRINTF();
-
-        merge = name->next_merged;
-        name = name->next;
-    }
-
-    return( (int) ( size - n ) );
 }
 
 /*
