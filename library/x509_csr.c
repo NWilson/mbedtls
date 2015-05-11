@@ -322,57 +322,14 @@ int x509_csr_parse_file( x509_csr *csr, const char *path )
 }
 #endif /* POLARSSL_FS_IO */
 
-#if defined(_MSC_VER) && !defined snprintf && !defined(EFIX64) && \
-    !defined(EFI32)
-#include <stdarg.h>
-
-#if !defined vsnprintf
-#define vsnprintf _vsnprintf
-#endif // vsnprintf
-
-/*
- * Windows _snprintf and _vsnprintf are not compatible to linux versions.
- * Result value is not size of buffer needed, but -1 if no fit is possible.
- *
- * This fuction tries to 'fix' this by at least suggesting enlarging the
- * size by 20.
- */
-static int compat_snprintf( char *str, size_t size, const char *format, ... )
-{
-    va_list ap;
-    int res = -1;
-
-    va_start( ap, format );
-
-    res = vsnprintf( str, size, format, ap );
-
-    va_end( ap );
-
-    // No quick fix possible
-    if( res < 0 )
-        return( (int) size + 20 );
-
-    return( res );
-}
-
-#define snprintf compat_snprintf
-#endif /* _MSC_VER && !snprintf && !EFIX64 && !EFI32 */
-
 #define POLARSSL_ERR_DEBUG_BUF_TOO_SMALL    -2
 
-#define SAFE_SNPRINTF()                             \
-{                                                   \
-    if( ret == -1 )                                 \
-        return( -1 );                               \
-                                                    \
-    if( (unsigned int) ret > n ) {                  \
-        p[n - 1] = '\0';                            \
-        return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL ); \
-    }                                               \
-                                                    \
-    n -= (unsigned int) ret;                        \
-    p += (unsigned int) ret;                        \
-}
+#define CHECK_AND_SKIP( ret, builder ) \
+    if( ret < 0 ) \
+        return( ret ); \
+    builder.buf += ret; \
+    builder.remaining_space -= ret; \
+    builder.written += ret;
 
 #define BEFORE_COLON    14
 #define BC              "14"
@@ -383,28 +340,25 @@ int x509_csr_info( char *buf, size_t size, const char *prefix,
                    const x509_csr *csr )
 {
     int ret;
-    size_t n;
-    char *p;
     char key_size_str[BEFORE_COLON];
+    string_builder_context builder;
 
-    p = buf;
-    n = size;
+    string_builder_init( &builder, buf, size );
 
-    ret = polarssl_snprintf( p, n, "%sCSR version   : %d",
-                               prefix, csr->version );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST3( "%sCSR version   : %d",
+                           prefix, csr->version ) );
 
-    ret = polarssl_snprintf( p, n, "\n%ssubject name  : ", prefix );
-    SAFE_SNPRINTF();
-    ret = x509_dn_gets( p, n, &csr->subject );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST2( "\n%ssubject name  : ",
+                           prefix ) );
 
-    ret = polarssl_snprintf( p, n, "\n%ssigned using  : ", prefix );
-    SAFE_SNPRINTF();
+    ret = x509_dn_gets( builder.buf, builder.remaining_space, &csr->subject );
+    CHECK_AND_SKIP( ret, builder );
 
-    ret = x509_sig_alg_gets( p, n, &csr->sig_oid, csr->sig_pk, csr->sig_md,
-                             csr->sig_opts );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST2( "\n%ssigned using  : ",
+                           prefix ) );
+
+     x509_sig_alg_gets( &builder, &csr->sig_oid, csr->sig_pk, csr->sig_md,
+                        csr->sig_opts );
 
     if( ( ret = x509_key_size_helper( key_size_str, BEFORE_COLON,
                                       pk_get_name( &csr->pk ) ) ) != 0 )
@@ -412,11 +366,14 @@ int x509_csr_info( char *buf, size_t size, const char *prefix,
         return( ret );
     }
 
-    ret = polarssl_snprintf( p, n, "\n%s%-" BC "s: %d bits\n", prefix, key_size_str,
-                          (int) pk_get_size( &csr->pk ) );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST4( "\n%s%-" BC "s: %d bits\n",
+                           prefix, key_size_str,
+                           (int) pk_get_size( &csr->pk ) ) );
 
-    return( (int) ( size - n ) );
+    /* x509_csr_info returns -2 for overflows, but this is undocumented */
+    if( builder.written >= size )
+        return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL );
+    return( (int) builder.written );
 }
 
 /*

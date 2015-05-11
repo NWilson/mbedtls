@@ -29,6 +29,7 @@
 #if defined(POLARSSL_ASN1_PARSE_C)
 
 #include "polarssl/asn1.h"
+#include "polarssl/string.h"
 
 #include <string.h>
 
@@ -390,6 +391,80 @@ asn1_named_data *asn1_find_named_data( asn1_named_data *list,
     }
 
     return( list );
+}
+
+int asn1_gets_utf8( const asn1_buf *obj, char *buf, size_t size )
+{
+    size_t i;
+    string_builder_context builder;
+
+    string_builder_init( &builder, buf, size );
+
+    switch( obj->tag ) {
+    case ASN1_UTF8_STRING:
+        /* Do a very simple validation of the data, to check it for embedded
+         * nuls, but don't reject invalid UTF-8. */
+        /* if( strnlen(obj->p, obj->len) < obj->len ) return ... */
+        for( i = 0; i < obj->len; ++i )
+        {
+            if( !obj->p[i] )
+                return( POLARSSL_ERR_ASN1_UNPRINTABLE );
+        }
+        string_builder_append( &builder, (const char*) obj->p, (int) obj->len );
+        break;
+
+    case ASN1_NUMERIC_STRING:
+    case ASN1_PRINTABLE_STRING:
+    case ASN1_T61_STRING:
+    case ASN1_IA5_STRING:
+    case ASN1_UTC_TIME:
+    case ASN1_GENERALIZED_TIME:
+        /* Do a simple copy of the ASCII types, rejecting strings with embedded
+         * nulls.  The T61 type is a relic of the past, very few libraries
+         * correctly decode T61 escape sequences; we choose to re-encode the
+         * non-ASCII characters as if they were Latin-1, to avoid output of
+         * invalid UTF-8 which can accidentally represent a completely different
+         * character.  This is in line with other libraries such as OpenSSL. */
+        for( i = 0; i < obj->len; ++i )
+        {
+            if( !obj->p[i] )
+                return( POLARSSL_ERR_ASN1_UNPRINTABLE );
+            if( obj->tag != ASN1_T61_STRING &&
+                (obj->p[i] & 0x80) )
+                return( POLARSSL_ERR_ASN1_INVALID_DATA );
+            string_builder_append_unichar( &builder, obj->p[i] );
+        }
+        break;
+
+    case ASN1_UNIVERSAL_STRING:
+        if( obj->len % 4 )
+            return( POLARSSL_ERR_ASN1_INVALID_DATA );
+        for( i = 0; i < ( obj->len / 4 ); i += 4 )
+        {
+            string_builder_append_unichar( &builder,
+                                           ( obj->p[ i   ] << 24 ) |
+                                           ( obj->p[ i+1 ] << 16 ) |
+                                           ( obj->p[ i+2 ] << 8 ) |
+                                           ( obj->p[ i+3 ]) );
+        }
+        break;
+
+    case ASN1_BMP_STRING:
+        if( obj->len % 2 )
+            return( POLARSSL_ERR_ASN1_INVALID_DATA );
+        for( i = 0; i < ( obj->len / 4 ); i += 4 )
+        {
+            string_builder_append_unichar( &builder,
+                                           ( obj->p[ i   ] << 8 ) |
+                                           ( obj->p[ i+1 ]) );
+        }
+        break;
+
+    default:
+        return( POLARSSL_ERR_ASN1_UNPRINTABLE );
+    }
+
+    return( (int)builder.written );
 }
 
 #endif /* POLARSSL_ASN1_PARSE_C */

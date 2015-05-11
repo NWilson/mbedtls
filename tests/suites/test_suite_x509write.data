@@ -59,7 +59,7 @@ depends_on:POLARSSL_SHA1_C:POLARSSL_RSA_C:POLARSSL_PKCS1_V15:POLARSSL_DES_C:POLA
 x509_crt_check:"data_files/server1.key":"":"C=NL,O=PolarSSL,CN=PolarSSL Server 1":"data_files/test-ca.key":"PolarSSLTest":"C=NL,O=PolarSSL,CN=PolarSSL Test CA":"1":"20110212144406":"20210212144406":POLARSSL_MD_SHA1:0:0:X509_CRT_VERSION_1:"data_files/server1.v1.crt"
 
 X509 String to Names #1
-x509_string_to_names:"C=NL,O=Offspark\, Inc., OU=PolarSSL":"C=NL, O=Offspark, Inc., OU=PolarSSL":0
+x509_string_to_names:"C=NL,O=Offspark\, Inc., OU=PolarSSL":"C=NL, O=Offspark\, Inc., OU=PolarSSL":0
 
 X509 String to Names #2
 x509_string_to_names:"C=NL, O=Offspark, Inc., OU=PolarSSL":"":POLARSSL_ERR_X509_UNKNOWN_OID

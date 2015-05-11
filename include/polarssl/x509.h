@@ -32,6 +32,7 @@
 
 #include "asn1.h"
 #include "pk.h"
+#include "polarssl/string.h"
 
 #if defined(POLARSSL_RSA_C)
 #include "rsa.h"
@@ -158,6 +159,14 @@
 
 #define X509_MAX_DN_NAME_SIZE         256 /**< Maximum value size of a DN entry */
 
+/*
+ * X.500 name printing options
+ */
+#define X500_NAME_SPACE                 (1 << 0)   /** Print spaces between components */
+#define X500_NAME_OIDS                  (1 << 1)   /** Print names as OIDs */
+#define X500_NAME_REV                   (1 << 2)   /** Print RDN components in reverse order */
+#define X500_NAME_RFC2253        (X500_NAME_REV)   /** Print using RFC2253 formatting */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -215,6 +224,23 @@ x509_time;
  *                 case of an error.
  */
 int x509_dn_gets( char *buf, size_t size, const x509_name *dn );
+
+/**
+ * \brief          Store the certificate DN in printable form into buf;
+ *                 no more than size characters will be written.
+ *
+ * \param buf      Buffer to write to
+ * \param size     Maximum size of buffer
+ * \param dn       The X509 name to represent
+ * \param flags    One or more of X500_NAME_SPACE, X500_NAME_OIDS, and
+ *                 X500_NAME_REV
+ *
+ * \return         The number of bytes written to the buffer, excluding the
+ *                 terminating nul; if this is size or more then the output was
+ *                 truncated.
+ */
+int x509_dn_gets_ext( char *buf, size_t size, const x509_name *dn,
+                      int flags );
 
 /**
  * \brief          Store the certificate serial in printable form into buf;
@@ -319,9 +345,9 @@ int x509_get_serial( unsigned char **p, const unsigned char *end,
                      x509_buf *serial );
 int x509_get_ext( unsigned char **p, const unsigned char *end,
                   x509_buf *ext, int tag );
-int x509_sig_alg_gets( char *buf, size_t size, const x509_buf *sig_oid,
-                       pk_type_t pk_alg, md_type_t md_alg,
-                       const void *sig_opts );
+void x509_sig_alg_gets( string_builder_context* builder, const x509_buf *sig_oid,
+                        pk_type_t pk_alg, md_type_t md_alg,
+                        const void *sig_opts );
 int x509_key_size_helper( char *buf, size_t size, const char *name );
 int x509_string_to_names( asn1_named_data **head, const char *name );
 int x509_set_extension( asn1_named_data **head, const char *oid, size_t oid_len,

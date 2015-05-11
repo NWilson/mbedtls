@@ -59,6 +59,7 @@ set(src
      ssl_cli.c
      ssl_srv.c
      ssl_tls.c
+     string.c
      threading.c
      timing.c
      version.c

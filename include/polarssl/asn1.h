@@ -52,9 +52,10 @@
 #define POLARSSL_ERR_ASN1_UNEXPECTED_TAG                   -0x0062  /**< ASN1 tag was of an unexpected value. */
 #define POLARSSL_ERR_ASN1_INVALID_LENGTH                   -0x0064  /**< Error when trying to determine the length or invalid length. */
 #define POLARSSL_ERR_ASN1_LENGTH_MISMATCH                  -0x0066  /**< Actual length differs from expected length. */
-#define POLARSSL_ERR_ASN1_INVALID_DATA                     -0x0068  /**< Data is invalid. (not used) */
+#define POLARSSL_ERR_ASN1_INVALID_DATA                     -0x0068  /**< Data is invalid. */
 #define POLARSSL_ERR_ASN1_MALLOC_FAILED                    -0x006A  /**< Memory allocation failed */
 #define POLARSSL_ERR_ASN1_BUF_TOO_SMALL                    -0x006C  /**< Buffer too small when writing ASN.1 data structure. */
+#define POLARSSL_ERR_ASN1_UNPRINTABLE                      -0x006D  /**< The object does not have a printable representation. */
 
 /* \} name */
 
@@ -78,6 +79,7 @@
 #define ASN1_UTF8_STRING             0x0C
 #define ASN1_SEQUENCE                0x10
 #define ASN1_SET                     0x11
+#define ASN1_NUMERIC_STRING          0x12
 #define ASN1_PRINTABLE_STRING        0x13
 #define ASN1_T61_STRING              0x14
 #define ASN1_IA5_STRING              0x16
@@ -337,6 +339,26 @@ void asn1_free_named_data( asn1_named_data *entry );
  * \param head  Pointer to the head of the list of named data entries to free
  */
 void asn1_free_named_data_list( asn1_named_data **head );
+
+/**
+ * \brief       Print the value of the object, encoded using UTF-8
+ *
+ *              The object must be one of the printable ASN.1 primitives: the
+ *              various string types (Utf8String, BMPString, PrintableString,
+ *              ...) or the string-like types (UtcTime, GeneralizedTime).
+ *
+ * \param obj   The printable object
+ * \param buf   The buffer into which to print
+ * \param size  The size of the buffer, including space for the terminating nul
+ *
+ * \return      The number of bytes written on success, or the number of bytes
+ *              that would have been written if overflow occurred, or
+ *              POLARSSL_ERR_ASN1_UNPRINTABLE if the ASN.1 type is not
+ *              printable.
+ */
+int asn1_gets_utf8( const asn1_buf *obj,
+                    char *buf,
+                    size_t size );
 
 #ifdef __cplusplus
 }

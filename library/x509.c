@@ -57,7 +57,6 @@
 #define polarssl_free       free
 #define polarssl_malloc     malloc
 #define polarssl_printf     printf
-#define polarssl_snprintf   snprintf
 #endif
 
 #if defined(_WIN32) && !defined(EFIX64) && !defined(EFI32)
@@ -666,118 +665,157 @@ int x509_get_ext( unsigned char **p, const unsigned char *end,
     return( 0 );
 }
 
-#if defined(_MSC_VER) && !defined snprintf && !defined(EFIX64) && \
-    !defined(EFI32)
-#include <stdarg.h>
-
-#if !defined vsnprintf
-#define vsnprintf _vsnprintf
-#endif // vsnprintf
-
-/*
- * Windows _snprintf and _vsnprintf are not compatible to linux versions.
- * Result value is not size of buffer needed, but -1 if no fit is possible.
- *
- * This fuction tries to 'fix' this by at least suggesting enlarging the
- * size by 20.
- */
-static int compat_snprintf( char *str, size_t size, const char *format, ... )
-{
-    va_list ap;
-    int res = -1;
-
-    va_start( ap, format );
-
-    res = vsnprintf( str, size, format, ap );
-
-    va_end( ap );
-
-    // No quick fix possible
-    if( res < 0 )
-        return( (int) size + 20 );
-
-    return( res );
-}
-
-#define snprintf compat_snprintf
-#endif /* _MSC_VER && !snprintf && !EFIX64 && !EFI32 */
-
 #define POLARSSL_ERR_DEBUG_BUF_TOO_SMALL    -2
 
-#define SAFE_SNPRINTF()                             \
-{                                                   \
-    if( ret == -1 )                                 \
-        return( -1 );                               \
-                                                    \
-    if( (unsigned int) ret > n ) {                  \
-        p[n - 1] = '\0';                            \
-        return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL ); \
-    }                                               \
-                                                    \
-    n -= (unsigned int) ret;                        \
-    p += (unsigned int) ret;                        \
+int x509_dn_gets( char *buf, size_t size, const x509_name *dn )
+{
+    int written;
+
+    /* Return the format that PolarSSL has historically returned, which is
+     * similar to the non-standard OpenSSL's X509_NAME_oneline() uses. */
+    written = x509_dn_gets_ext( buf, size, dn, X500_NAME_SPACE );
+
+    if( written < 0 )
+        return -1;
+    /* x509_dn_gets returns -2 for overflows, but this is undocumented */
+    if( (size_t)written >= size )
+        return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL );
+    return( written );
+}
+
+#define X509_MAX_DN_OID_SIZE 64
+
+static int x509_print_rdn( string_builder_context *builder,
+                           const x509_name *name, int first, int merge,
+                           int opt_spc, int opt_oids )
+{
+    int ret;
+    size_t i;
+    const char *short_name = NULL;
+    char c, buf[128];
+    const char* decoded_name = buf;
+    char* decoded_buf = NULL;
+
+    if( !first )
+    {
+        string_builder_append( builder,
+                               merge ? (opt_spc ? " + " : "+")
+                                     : (opt_spc ? ", " : ","),
+                               -1);
+    }
+
+    if( !opt_oids &&
+        oid_get_attr_short_name( &name->oid, &short_name ) == 0 )
+    {
+        string_builder_printf( builder, ARG_LIST2( "%s=", short_name ) );
+    }
+    else
+    {
+        ret = oid_get_numeric_string( buf, sizeof buf, &name->oid );
+        if( ret < 0 )
+            return -1;
+        string_builder_printf( builder, ARG_LIST2( "%s=", buf ) );
+    }
+
+    ret = asn1_gets_utf8( &name->val, buf, sizeof buf );
+    if( ret == POLARSSL_ERR_ASN1_UNPRINTABLE )
+    {
+        string_builder_append( builder, "#", -1);
+        string_builder_append_hex( builder, name->val.p, name->val.len );
+        return 0;
+    }
+    else if( ret < 0 )
+    {
+        return -1;
+    }
+    else if ( ret >= (int) sizeof buf )
+    {
+        decoded_buf = polarssl_malloc( ret + 1 );
+        if( !decoded_buf )
+            return -1;
+        asn1_gets_utf8( &name->val, decoded_buf, ret + 1);
+        decoded_name = decoded_buf;
+    }
+
+    for( i = 0; decoded_name[i]; ++i )
+    {
+        c = decoded_name[i];
+        if( c == ',' || c == '+' || c == '"' || c == '\\' || c == '<' ||
+            c == '>' || c == ';' ||
+            ( i == 0 && ( c == ' ' || c == '#' ) ) ||
+            ( !decoded_name[ i+1 ] && c == ' ' ) )
+        {
+            string_builder_append( builder, "\\", -1 );
+        }
+        string_builder_append( builder, decoded_name + i, 1 );
+    }
+
+    if( decoded_buf )
+        polarssl_free( decoded_buf );
+    return 0;
 }
 
 /*
  * Store the name in printable form into buf; no more
  * than size characters will be written
  */
-int x509_dn_gets( char *buf, size_t size, const x509_name *dn )
+int x509_dn_gets_ext( char *buf, size_t size, const x509_name *dn,
+                      int flags )
 {
-    int ret;
-    size_t i, n;
-    unsigned char c, merge = 0;
-    const x509_name *name;
-    const char *short_name = NULL;
-    char s[X509_MAX_DN_NAME_SIZE], *p;
-
-    memset( s, 0, sizeof( s ) );
+    int opt_spc, opt_oids, opt_rev;
+    unsigned char merge = 0;
+    const x509_name *name, *prev_name;
+    string_builder_context builder;
 
     name = dn;
-    p = buf;
-    n = size;
 
-    while( name != NULL )
+    string_builder_init( &builder, buf, size );
+
+    opt_spc = flags & X500_NAME_SPACE;
+    opt_oids = flags & X500_NAME_OIDS;
+    opt_rev = flags & X500_NAME_REV;
+
+    if( !opt_rev )
     {
-        if( !name->oid.p )
+        while( name != NULL )
         {
+            if( !name->oid.p )
+            {
+                name = name->next;
+                continue;
+            }
+
+            if( x509_print_rdn( &builder, name, name == dn, merge, opt_spc,
+                                opt_oids ) < 0)
+                return -1 ;
+
+            merge = name->next_merged;
             name = name->next;
-            continue;
         }
-
-        if( name != dn )
+    }
+    else
+    {
+        prev_name = NULL;
+        while( prev_name != dn )
         {
-            ret = polarssl_snprintf( p, n, merge ? " + " : ", " );
-            SAFE_SNPRINTF();
+            for( name = dn; name->next != prev_name; name = name->next )
+              ;
+
+            if( !name->oid.p )
+            {
+                prev_name = name;
+                continue;
+            }
+
+            if( x509_print_rdn( &builder, name, name->next == NULL,
+                                name->next_merged, opt_spc, opt_oids ) < 0)
+                return -1;
+
+            prev_name = name;
         }
-
-        ret = oid_get_attr_short_name( &name->oid, &short_name );
-
-        if( ret == 0 )
-            ret = polarssl_snprintf( p, n, "%s=", short_name );
-        else
-            ret = polarssl_snprintf( p, n, "\?\?=" );
-        SAFE_SNPRINTF();
-
-        for( i = 0; i < name->val.len; i++ )
-        {
-            if( i >= sizeof( s ) - 1 )
-                break;
-
-            c = name->val.p[i];
-            if( c < 32 || c == 127 || ( c > 128 && c < 160 ) )
-                 s[i] = '?';
-            else s[i] = c;
-        }
-        s[i] = '\0';
-        ret = polarssl_snprintf( p, n, "%s", s );
-        SAFE_SNPRINTF();
-
-        merge = name->next_merged;
-        name = name->next;
     }
 
-    return( (int) ( size - n ) );
+    return( (int)builder.written );
 }
 
 /*
@@ -786,12 +824,10 @@ int x509_dn_gets( char *buf, size_t size, const x509_name *dn )
  */
 int x509_serial_gets( char *buf, size_t size, const x509_buf *serial )
 {
-    int ret;
-    size_t i, n, nr;
-    char *p;
+    size_t i, nr;
+    string_builder_context builder;
 
-    p = buf;
-    n = size;
+    string_builder_init( &builder, buf, size );
 
     nr = ( serial->len <= 32 )
         ? serial->len  : 28;
@@ -801,38 +837,35 @@ int x509_serial_gets( char *buf, size_t size, const x509_buf *serial )
         if( i == 0 && nr > 1 && serial->p[i] == 0x0 )
             continue;
 
-        ret = polarssl_snprintf( p, n, "%02X%s",
-                serial->p[i], ( i < nr - 1 ) ? ":" : "" );
-        SAFE_SNPRINTF();
+        string_builder_printf( &builder, ARG_LIST3( "%02X%s", serial->p[i],
+                               ( i < nr - 1 ) ? ":" : "" ));
     }
 
     if( nr != serial->len )
     {
-        ret = polarssl_snprintf( p, n, "...." );
-        SAFE_SNPRINTF();
+        string_builder_append( &builder, "....", -1 );
     }
 
-    return( (int) ( size - n ) );
+    if( builder.written + 1 > size )
+        return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL );
+    return( builder.written );
 }
 
 /*
  * Helper for writing signature algorithms
  */
-int x509_sig_alg_gets( char *buf, size_t size, const x509_buf *sig_oid,
-                       pk_type_t pk_alg, md_type_t md_alg,
-                       const void *sig_opts )
+void x509_sig_alg_gets( string_builder_context *builder, const x509_buf *sig_oid,
+                        pk_type_t pk_alg, md_type_t md_alg,
+                        const void *sig_opts )
 {
     int ret;
-    char *p = buf;
-    size_t n = size;
     const char *desc = NULL;
 
     ret = oid_get_sig_alg_desc( sig_oid, &desc );
     if( ret != 0 )
-        ret = polarssl_snprintf( p, n, "???"  );
+        ret = string_builder_append( builder, "???", -1 );
     else
-        ret = polarssl_snprintf( p, n, "%s", desc );
-    SAFE_SNPRINTF();
+        ret = string_builder_append( builder, desc, -1 );
 
 #if defined(POLARSSL_X509_RSASSA_PSS_SUPPORT)
     if( pk_alg == POLARSSL_PK_RSASSA_PSS )
@@ -845,19 +878,17 @@ int x509_sig_alg_gets( char *buf, size_t size, const x509_buf *sig_oid,
         md_info = md_info_from_type( md_alg );
         mgf_md_info = md_info_from_type( pss_opts->mgf1_hash_id );
 
-        ret = polarssl_snprintf( p, n, " (%s, MGF1-%s, 0x%02X)",
+        string_builder_printf( builder,
+                              ARG_LIST4( " (%s, MGF1-%s, 0x%02X)",
                               md_info ? md_info->name : "???",
                               mgf_md_info ? mgf_md_info->name : "???",
-                              pss_opts->expected_salt_len );
-        SAFE_SNPRINTF();
+                              pss_opts->expected_salt_len ) );
     }
 #else
     ((void) pk_alg);
     ((void) md_alg);
     ((void) sig_opts);
 #endif /* POLARSSL_X509_RSASSA_PSS_SUPPORT */
-
-    return( (int)( size - n ) );
 }
 
 /*
@@ -865,17 +896,12 @@ int x509_sig_alg_gets( char *buf, size_t size, const x509_buf *sig_oid,
  */
 int x509_key_size_helper( char *buf, size_t size, const char *name )
 {
-    char *p = buf;
-    size_t n = size;
-    int ret;
+    string_builder_context builder;
 
-    if( strlen( name ) + sizeof( " key size" ) > size )
-        return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL );
-
-    ret = polarssl_snprintf( p, n, "%s key size", name );
-    SAFE_SNPRINTF();
-
-    return( 0 );
+    string_builder_init( &builder, buf, size );
+    string_builder_append( &builder, name, -1 );
+    string_builder_append( &builder, " key size", -1 );
+    return( builder.written >= size ? -1 : 0 );
 }
 
 /*

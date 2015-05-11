@@ -125,7 +125,7 @@ int x509_string_to_names( asn1_named_data **head, const char *name )
             c++;
 
             /* Check for valid escaped characters */
-            if( c == end || *c != ',' )
+            if( c == end || ( *c != ',' && *c != '\\' ) )
             {
                 ret = POLARSSL_ERR_X509_INVALID_NAME;
                 goto exit;

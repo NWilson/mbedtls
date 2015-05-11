@@ -1,5 +1,5 @@
 /*
- *  X.509 Certidicate Revocation List (CRL) parsing
+ *  X.509 Certificate Revocation List (CRL) parsing
  *
  *  Copyright (C) 2006-2014, ARM Limited, All Rights Reserved
  *
@@ -561,63 +561,14 @@ int x509_crl_parse_file( x509_crl *chain, const char *path )
 }
 #endif /* POLARSSL_FS_IO */
 
-#if defined(_MSC_VER) && !defined snprintf && !defined(EFIX64) && \
-    !defined(EFI32)
-#include <stdarg.h>
-
-#if !defined vsnprintf
-#define vsnprintf _vsnprintf
-#endif // vsnprintf
-
-/*
- * Windows _snprintf and _vsnprintf are not compatible to linux versions.
- * Result value is not size of buffer needed, but -1 if no fit is possible.
- *
- * This fuction tries to 'fix' this by at least suggesting enlarging the
- * size by 20.
- */
-static int compat_snprintf( char *str, size_t size, const char *format, ... )
-{
-    va_list ap;
-    int res = -1;
-
-    va_start( ap, format );
-
-    res = vsnprintf( str, size, format, ap );
-
-    va_end( ap );
-
-    // No quick fix possible
-    if( res < 0 )
-        return( (int) size + 20 );
-
-    return( res );
-}
-
-#define snprintf compat_snprintf
-#endif /* _MSC_VER && !snprintf && !EFIX64 && !EFI32 */
-
 #define POLARSSL_ERR_DEBUG_BUF_TOO_SMALL    -2
 
-#define SAFE_SNPRINTF()                             \
-{                                                   \
-    if( ret == -1 )                                 \
-        return( -1 );                               \
-                                                    \
-    if( (unsigned int) ret > n ) {                  \
-        p[n - 1] = '\0';                            \
-        return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL ); \
-    }                                               \
-                                                    \
-    n -= (unsigned int) ret;                        \
-    p += (unsigned int) ret;                        \
-}
+#define CHECK_AND_SKIP( ret, builder ) \
+    if( ret < 0 ) \
+        return( ret ); \
+    builder.buf += ret; \
+    builder.remaining_space -= ret;
 
-/*
- * Return an informational string about the certificate.
- */
-#define BEFORE_COLON    14
-#define BC              "14"
 /*
  * Return an informational string about the CRL.
  */
@@ -625,72 +576,65 @@ int x509_crl_info( char *buf, size_t size, const char *prefix,
                    const x509_crl *crl )
 {
     int ret;
-    size_t n;
-    char *p;
     const x509_crl_entry *entry;
+    char serial_str[64];
+    string_builder_context builder;
 
-    p = buf;
-    n = size;
+    string_builder_init( &builder, buf, size );
 
-    ret = polarssl_snprintf( p, n, "%sCRL version   : %d",
-                               prefix, crl->version );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST3( "%sCRL version   : %d",
+                           prefix, crl->version ) );
 
-    ret = polarssl_snprintf( p, n, "\n%sissuer name   : ", prefix );
-    SAFE_SNPRINTF();
-    ret = x509_dn_gets( p, n, &crl->issuer );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST2( "\n%sissuer name   : ",
+                           prefix ) );
+    ret = x509_dn_gets( builder.buf, builder.remaining_space, &crl->issuer );
+    CHECK_AND_SKIP( ret, builder );
 
-    ret = polarssl_snprintf( p, n, "\n%sthis update   : " \
-                   "%04d-%02d-%02d %02d:%02d:%02d", prefix,
+    string_builder_printf( &builder, ARG_LIST8(
+                   "\n%sthis update   : %04d-%02d-%02d %02d:%02d:%02d", prefix,
                    crl->this_update.year, crl->this_update.mon,
                    crl->this_update.day,  crl->this_update.hour,
-                   crl->this_update.min,  crl->this_update.sec );
-    SAFE_SNPRINTF();
+                   crl->this_update.min,  crl->this_update.sec ) );
 
-    ret = polarssl_snprintf( p, n, "\n%snext update   : " \
-                   "%04d-%02d-%02d %02d:%02d:%02d", prefix,
+    string_builder_printf( &builder, ARG_LIST8(
+                   "\n%snext update   : %04d-%02d-%02d %02d:%02d:%02d", prefix,
                    crl->next_update.year, crl->next_update.mon,
                    crl->next_update.day,  crl->next_update.hour,
-                   crl->next_update.min,  crl->next_update.sec );
-    SAFE_SNPRINTF();
+                   crl->next_update.min,  crl->next_update.sec ) );
+
+    string_builder_printf( &builder, ARG_LIST2( "\n%sRevoked certificates:",
+                               prefix ) );
 
     entry = &crl->entry;
-
-    ret = polarssl_snprintf( p, n, "\n%sRevoked certificates:",
-                               prefix );
-    SAFE_SNPRINTF();
-
     while( entry != NULL && entry->raw.len != 0 )
     {
-        ret = polarssl_snprintf( p, n, "\n%sserial number: ",
-                               prefix );
-        SAFE_SNPRINTF();
+        ret = x509_serial_gets( serial_str, sizeof serial_str, &entry->serial );
+        if( ret < 0 )
+            return ret;
+        string_builder_printf( &builder, ARG_LIST3( "\n%sserial number: %s",
+                               prefix, serial_str ) );
 
-        ret = x509_serial_gets( p, n, &entry->serial );
-        SAFE_SNPRINTF();
-
-        ret = polarssl_snprintf( p, n, " revocation date: " \
-                   "%04d-%02d-%02d %02d:%02d:%02d",
+        string_builder_printf( &builder, ARG_LIST7(
+                   " revocation date: %04d-%02d-%02d %02d:%02d:%02d",
                    entry->revocation_date.year, entry->revocation_date.mon,
                    entry->revocation_date.day,  entry->revocation_date.hour,
-                   entry->revocation_date.min,  entry->revocation_date.sec );
-        SAFE_SNPRINTF();
+                   entry->revocation_date.min,  entry->revocation_date.sec ) );
 
         entry = entry->next;
     }
 
-    ret = polarssl_snprintf( p, n, "\n%ssigned using  : ", prefix );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST2( "\n%ssigned using  : ",
+                           prefix ) );
 
-    ret = x509_sig_alg_gets( p, n, &crl->sig_oid1, crl->sig_pk, crl->sig_md,
-                             crl->sig_opts );
-    SAFE_SNPRINTF();
+    x509_sig_alg_gets( &builder, &crl->sig_oid1, crl->sig_pk, crl->sig_md,
+                       crl->sig_opts );
 
-    ret = polarssl_snprintf( p, n, "\n" );
-    SAFE_SNPRINTF();
+    string_builder_append( &builder, "\n", -1 );
 
-    return( (int) ( size - n ) );
+    /* x509_crl_info returns -2 for overflows, but this is undocumented */
+    if( builder.written >= size )
+        return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL );
+    return( (int)builder.written );
 }
 
 /*

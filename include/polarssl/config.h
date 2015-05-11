@@ -74,6 +74,13 @@
 #define POLARSSL_HAVE_LONGLONG
 
 /**
+ * \def POLARSSL_HAVE_STDARG
+ *
+ * The compiler has support for stdarg.h, va_list, and vsnprintf
+ */
+#define POLARSSL_HAVE_STDARG
+
+/**
  * \def POLARSSL_HAVE_ASM
  *
  * The compiler has support for asm().

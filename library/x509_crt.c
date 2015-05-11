@@ -1074,113 +1074,39 @@ cleanup:
 }
 #endif /* POLARSSL_FS_IO */
 
-#if defined(_MSC_VER) && !defined snprintf && !defined(EFIX64) && \
-    !defined(EFI32)
-#include <stdarg.h>
-
-#if !defined vsnprintf
-#define vsnprintf _vsnprintf
-#endif // vsnprintf
-
-/*
- * Windows _snprintf and _vsnprintf are not compatible to linux versions.
- * Result value is not size of buffer needed, but -1 if no fit is possible.
- *
- * This fuction tries to 'fix' this by at least suggesting enlarging the
- * size by 20.
- */
-static int compat_snprintf( char *str, size_t size, const char *format, ... )
-{
-    va_list ap;
-    int res = -1;
-
-    va_start( ap, format );
-
-    res = vsnprintf( str, size, format, ap );
-
-    va_end( ap );
-
-    // No quick fix possible
-    if( res < 0 )
-        return( (int) size + 20 );
-
-    return( res );
-}
-
-#define snprintf compat_snprintf
-#endif /* _MSC_VER  && !snprintf && !EFIX64 && !EFI32 */
-
 #define POLARSSL_ERR_DEBUG_BUF_TOO_SMALL    -2
 
-#define SAFE_SNPRINTF()                             \
-{                                                   \
-    if( ret == -1 )                                 \
-        return( -1 );                               \
-                                                    \
-    if( (unsigned int) ret > n ) {                  \
-        p[n - 1] = '\0';                            \
-        return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL ); \
-    }                                               \
-                                                    \
-    n -= (unsigned int) ret;                        \
-    p += (unsigned int) ret;                        \
-}
-
-static int x509_info_subject_alt_name( char **buf, size_t *size,
-                                       const x509_sequence *subject_alt_name )
+static void x509_info_subject_alt_name( string_builder_context *builder,
+                                        const x509_sequence *subject_alt_name )
 {
-    size_t i;
-    size_t n = *size;
-    char *p = *buf;
     const x509_sequence *cur = subject_alt_name;
     const char *sep = "";
-    size_t sep_len = 0;
 
     while( cur != NULL )
     {
-        if( cur->buf.len + sep_len >= n )
-        {
-            *p = '\0';
-            return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL );
-        }
-
-        n -= cur->buf.len + sep_len;
-        for( i = 0; i < sep_len; i++ )
-            *p++ = sep[i];
-        for( i = 0; i < cur->buf.len; i++ )
-            *p++ = cur->buf.p[i];
-
+        string_builder_append( builder, sep, -1 );
+        /* Nasty - appending raw ASN.1 string data */
+        string_builder_append( builder, (const char*)cur->buf.p, cur->buf.len );
         sep = ", ";
-        sep_len = 2;
 
         cur = cur->next;
     }
-
-    *p = '\0';
-
-    *size = n;
-    *buf = p;
-
-    return( 0 );
 }
 
-#define PRINT_ITEM(i)                           \
-    {                                           \
-        ret = polarssl_snprintf( p, n, "%s" i, sep );    \
-        SAFE_SNPRINTF();                        \
-        sep = ", ";                             \
+#define PRINT_ITEM(i)                              \
+    {                                              \
+        string_builder_append( builder, sep, -1 ); \
+        string_builder_append( builder, i, -1 );   \
+        sep = ", ";                                \
     }
 
 #define CERT_TYPE(type,name)                    \
     if( ns_cert_type & type )                   \
         PRINT_ITEM( name );
 
-static int x509_info_cert_type( char **buf, size_t *size,
-                                unsigned char ns_cert_type )
+static void x509_info_cert_type( string_builder_context *builder,
+                                 unsigned char ns_cert_type )
 {
-    int ret;
-    size_t n = *size;
-    char *p = *buf;
     const char *sep = "";
 
     CERT_TYPE( NS_CERT_TYPE_SSL_CLIENT,         "SSL Client" );
@@ -1191,23 +1117,15 @@ static int x509_info_cert_type( char **buf, size_t *size,
     CERT_TYPE( NS_CERT_TYPE_SSL_CA,             "SSL CA" );
     CERT_TYPE( NS_CERT_TYPE_EMAIL_CA,           "Email CA" );
     CERT_TYPE( NS_CERT_TYPE_OBJECT_SIGNING_CA,  "Object Signing CA" );
-
-    *size = n;
-    *buf = p;
-
-    return( 0 );
 }
 
 #define KEY_USAGE(code,name)    \
     if( key_usage & code )      \
         PRINT_ITEM( name );
 
-static int x509_info_key_usage( char **buf, size_t *size,
-                                unsigned char key_usage )
+static void x509_info_key_usage( string_builder_context *builder,
+                                 unsigned char key_usage )
 {
-    int ret;
-    size_t n = *size;
-    char *p = *buf;
     const char *sep = "";
 
     KEY_USAGE( KU_DIGITAL_SIGNATURE,    "Digital Signature" );
@@ -1217,20 +1135,12 @@ static int x509_info_key_usage( char **buf, size_t *size,
     KEY_USAGE( KU_KEY_AGREEMENT,        "Key Agreement" );
     KEY_USAGE( KU_KEY_CERT_SIGN,        "Key Cert Sign" );
     KEY_USAGE( KU_CRL_SIGN,             "CRL Sign" );
-
-    *size = n;
-    *buf = p;
-
-    return( 0 );
 }
 
-static int x509_info_ext_key_usage( char **buf, size_t *size,
-                                    const x509_sequence *extended_key_usage )
+static void x509_info_ext_key_usage( string_builder_context *builder,
+                                     const x509_sequence *extended_key_usage )
 {
-    int ret;
     const char *desc;
-    size_t n = *size;
-    char *p = *buf;
     const x509_sequence *cur = extended_key_usage;
     const char *sep = "";
 
@@ -1239,19 +1149,20 @@ static int x509_info_ext_key_usage( char **buf, size_t *size,
         if( oid_get_extended_key_usage( &cur->buf, &desc ) != 0 )
             desc = "???";
 
-        ret = polarssl_snprintf( p, n, "%s%s", sep, desc );
-        SAFE_SNPRINTF();
+        string_builder_append( builder, sep, -1 );
+        string_builder_append( builder, desc, -1 );
 
         sep = ", ";
 
         cur = cur->next;
     }
-
-    *size = n;
-    *buf = p;
-
-    return( 0 );
 }
+
+#define CHECK_AND_SKIP( ret, builder ) \
+    if( ret < 0 ) \
+        return( ret ); \
+    builder.buf += ret; \
+    builder.remaining_space -= ret;
 
 /*
  * Return an informational string about the certificate.
@@ -1262,64 +1173,57 @@ int x509_crt_info( char *buf, size_t size, const char *prefix,
                    const x509_crt *crt )
 {
     int ret;
-    size_t n;
-    char *p;
-    char key_size_str[BEFORE_COLON];
+    char key_size_str[BEFORE_COLON], serial_str[64];
+    string_builder_context builder;
 
-    p = buf;
-    n = size;
+    string_builder_init( &builder, buf, size );
 
-    ret = polarssl_snprintf( p, n, "%scert. version     : %d\n",
-                               prefix, crt->version );
-    SAFE_SNPRINTF();
-    ret = polarssl_snprintf( p, n, "%sserial number     : ",
-                               prefix );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST3( "%scert. version     : %d\n",
+                           prefix, crt->version ) );
 
-    ret = x509_serial_gets( p, n, &crt->serial );
-    SAFE_SNPRINTF();
+    ret = x509_serial_gets( serial_str, sizeof serial_str, &crt->serial );
+    if( ret < 0 )
+        return( ret );
+    string_builder_printf( &builder, ARG_LIST3("%sserial number     : %s\n",
+                           prefix, serial_str ) );
 
-    ret = polarssl_snprintf( p, n, "\n%sissuer name       : ", prefix );
-    SAFE_SNPRINTF();
-    ret = x509_dn_gets( p, n, &crt->issuer  );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST2( "%sissuer name       : ",
+                           prefix ) );
+    ret = x509_dn_gets( builder.buf, builder.remaining_space, &crt->issuer  );
+    CHECK_AND_SKIP( ret, builder );
 
-    ret = polarssl_snprintf( p, n, "\n%ssubject name      : ", prefix );
-    SAFE_SNPRINTF();
-    ret = x509_dn_gets( p, n, &crt->subject );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST2( "\n%ssubject name      : ",
+                           prefix ) );
+    ret = x509_dn_gets( builder.buf, builder.remaining_space, &crt->subject );
+    CHECK_AND_SKIP( ret, builder )
 
-    ret = polarssl_snprintf( p, n, "\n%sissued  on        : " \
-                   "%04d-%02d-%02d %02d:%02d:%02d", prefix,
-                   crt->valid_from.year, crt->valid_from.mon,
+    string_builder_printf( &builder, ARG_LIST8(
+                   "\n%sissued  on        : %04d-%02d-%02d %02d:%02d:%02d\n",
+                   prefix, crt->valid_from.year, crt->valid_from.mon,
                    crt->valid_from.day,  crt->valid_from.hour,
-                   crt->valid_from.min,  crt->valid_from.sec );
-    SAFE_SNPRINTF();
+                   crt->valid_from.min,  crt->valid_from.sec ) );
 
-    ret = polarssl_snprintf( p, n, "\n%sexpires on        : " \
-                   "%04d-%02d-%02d %02d:%02d:%02d", prefix,
-                   crt->valid_to.year, crt->valid_to.mon,
+    string_builder_printf( &builder, ARG_LIST8(
+                   "%sexpires on        : %04d-%02d-%02d %02d:%02d:%02d\n",
+                   prefix, crt->valid_to.year, crt->valid_to.mon,
                    crt->valid_to.day,  crt->valid_to.hour,
-                   crt->valid_to.min,  crt->valid_to.sec );
-    SAFE_SNPRINTF();
+                   crt->valid_to.min,  crt->valid_to.sec ) );
 
-    ret = polarssl_snprintf( p, n, "\n%ssigned using      : ", prefix );
-    SAFE_SNPRINTF();
-
-    ret = x509_sig_alg_gets( p, n, &crt->sig_oid1, crt->sig_pk,
-                             crt->sig_md, crt->sig_opts );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST2( "%ssigned using      : ",
+                           prefix ) );
+    x509_sig_alg_gets( &builder, &crt->sig_oid1, crt->sig_pk, crt->sig_md,
+                       crt->sig_opts );
 
     /* Key size */
-    if( ( ret = x509_key_size_helper( key_size_str, BEFORE_COLON,
-                                      pk_get_name( &crt->pk ) ) ) != 0 )
+    if( x509_key_size_helper( key_size_str, BEFORE_COLON,
+                              pk_get_name( &crt->pk ) ) != 0 )
     {
-        return( ret );
+        return( -1 );
     }
 
-    ret = polarssl_snprintf( p, n, "\n%s%-" BC "s: %d bits", prefix, key_size_str,
-                          (int) pk_get_size( &crt->pk ) );
-    SAFE_SNPRINTF();
+    string_builder_printf( &builder, ARG_LIST4( "\n%s%-" BC "s: %d bits",
+                           prefix, key_size_str,
+                           (int) pk_get_size( &crt->pk ) ) );
 
     /*
      * Optional extensions
@@ -1327,59 +1231,51 @@ int x509_crt_info( char *buf, size_t size, const char *prefix,
 
     if( crt->ext_types & EXT_BASIC_CONSTRAINTS )
     {
-        ret = polarssl_snprintf( p, n, "\n%sbasic constraints : CA=%s", prefix,
-                        crt->ca_istrue ? "true" : "false" );
-        SAFE_SNPRINTF();
+        string_builder_printf( &builder, ARG_LIST3(
+                        "\n%sbasic constraints : CA=%s", prefix,
+                        crt->ca_istrue ? "true" : "false" ) );
 
         if( crt->max_pathlen > 0 )
         {
-            ret = polarssl_snprintf( p, n, ", max_pathlen=%d", crt->max_pathlen - 1 );
-            SAFE_SNPRINTF();
+            string_builder_printf( &builder, ARG_LIST2(
+                        ", max_pathlen=%d", crt->max_pathlen - 1 ) );
         }
     }
 
     if( crt->ext_types & EXT_SUBJECT_ALT_NAME )
     {
-        ret = polarssl_snprintf( p, n, "\n%ssubject alt name  : ", prefix );
-        SAFE_SNPRINTF();
-
-        if( ( ret = x509_info_subject_alt_name( &p, &n,
-                                            &crt->subject_alt_names ) ) != 0 )
-            return( ret );
+        string_builder_printf( &builder, ARG_LIST2(
+                        "\n%ssubject alt name  : ", prefix ) );
+        x509_info_subject_alt_name( &builder, &crt->subject_alt_names );
     }
 
     if( crt->ext_types & EXT_NS_CERT_TYPE )
     {
-        ret = polarssl_snprintf( p, n, "\n%scert. type        : ", prefix );
-        SAFE_SNPRINTF();
-
-        if( ( ret = x509_info_cert_type( &p, &n, crt->ns_cert_type ) ) != 0 )
-            return( ret );
+        string_builder_printf( &builder, ARG_LIST2(
+                        "\n%scert. type        : ", prefix ) );
+        x509_info_cert_type( &builder, crt->ns_cert_type );
     }
 
     if( crt->ext_types & EXT_KEY_USAGE )
     {
-        ret = polarssl_snprintf( p, n, "\n%skey usage         : ", prefix );
-        SAFE_SNPRINTF();
-
-        if( ( ret = x509_info_key_usage( &p, &n, crt->key_usage ) ) != 0 )
-            return( ret );
+        string_builder_printf( &builder, ARG_LIST2(
+                        "\n%skey usage         : ", prefix ) );
+        x509_info_key_usage( &builder, crt->key_usage );
     }
 
     if( crt->ext_types & EXT_EXTENDED_KEY_USAGE )
     {
-        ret = polarssl_snprintf( p, n, "\n%sext key usage     : ", prefix );
-        SAFE_SNPRINTF();
-
-        if( ( ret = x509_info_ext_key_usage( &p, &n,
-                                             &crt->ext_key_usage ) ) != 0 )
-            return( ret );
+        string_builder_printf( &builder, ARG_LIST2(
+                        "\n%sext key usage     : ", prefix ) );
+        x509_info_ext_key_usage( &builder, &crt->ext_key_usage );
     }
 
-    ret = polarssl_snprintf( p, n, "\n" );
-    SAFE_SNPRINTF();
+    string_builder_append( &builder, "\n", -1 );
 
-    return( (int) ( size - n ) );
+    /* x509_crt_info returns -2 for overflows, but this is undocumented */
+    if( builder.written >= size )
+        return( POLARSSL_ERR_DEBUG_BUF_TOO_SMALL );
+    return( (int)builder.written );
 }
 
 struct x509_crt_verify_string {
@@ -1408,29 +1304,30 @@ static const struct x509_crt_verify_string x509_crt_verify_strings[] = {
 int x509_crt_verify_info( char *buf, size_t size, const char *prefix,
                           int flags )
 {
-    int ret;
     const struct x509_crt_verify_string *cur;
-    char *p = buf;
-    size_t n = size;
+    string_builder_context builder;
+
+    string_builder_init( &builder, buf, size );
 
     for( cur = x509_crt_verify_strings; cur->string != NULL ; cur++ )
     {
         if( ( flags & cur->code ) == 0 )
             continue;
 
-        ret = polarssl_snprintf( p, n, "%s%s\n", prefix, cur->string );
-        SAFE_SNPRINTF();
+        string_builder_printf( &builder, ARG_LIST3( "%s%s\n", prefix,
+                               cur->string ) );
         flags ^= cur->code;
     }
 
     if( flags != 0 )
     {
-        ret = polarssl_snprintf( p, n, "%sUnknown reason "
-                                       "(this should not happen)\n", prefix );
-        SAFE_SNPRINTF();
+        string_builder_printf( &builder, ARG_LIST2(
+              "%sUnknown reason (this should not happen)\n", prefix ) );
     }
 
-    return( (int) ( size - n ) );
+    if( builder.written >= size )
+        return -1;
+    return( (int) builder.written );
 }
 
 #if defined(POLARSSL_X509_CHECK_KEY_USAGE)
@@ -1963,6 +1860,8 @@ static int x509_crt_verify_child(
     return( 0 );
 }
 
+#define X509_MAX_DNS_NAME 255
+
 /*
  * Verify the certificate validity
  */
@@ -1979,6 +1878,7 @@ int x509_crt_verify( x509_crt *crt,
     x509_crt *parent;
     x509_name *name;
     x509_sequence *cur = NULL;
+    char decoded_cn[X509_MAX_DNS_NAME + 1];
 
     *flags = 0;
 
@@ -1993,6 +1893,8 @@ int x509_crt_verify( x509_crt *crt,
 
             while( cur != NULL )
             {
+                /* dNSName is always ASCII (IA5) so it's safe to compare byte-
+                 * by-byte with cn (ASCII or UTF-8). */
                 if( cur->buf.len == cn_len &&
                     x509_memcasecmp( cn, cur->buf.p, cn_len ) == 0 )
                     break;
@@ -2014,13 +1916,20 @@ int x509_crt_verify( x509_crt *crt,
             {
                 if( OID_CMP( OID_AT_CN, &name->oid ) )
                 {
-                    if( name->val.len == cn_len &&
-                        x509_memcasecmp( name->val.p, cn, cn_len ) == 0 )
+                    ret = asn1_gets_utf8( &name->val, decoded_cn,
+                                          sizeof decoded_cn);
+                    if( ret < 0 || ret >= (int) sizeof decoded_cn )
+                    {
+                        name = name->next;
+                        continue;
+                    }
+
+                    if( strlen( decoded_cn ) == cn_len &&
+                        x509_memcasecmp( decoded_cn, cn, cn_len ) == 0 )
                         break;
 
-                    if( name->val.len > 2 &&
-                        memcmp( name->val.p, "*.", 2 ) == 0 &&
-                                x509_wildcard_verify( cn, &name->val ) )
+                    if( strncmp( decoded_cn, "*.", 2 ) == 0 &&
+                        x509_wildcard_verify( cn, &name->val ) )
                         break;
                 }
 
