@@ -84,6 +84,12 @@ typedef struct mbedtls_x509_crt
 
     unsigned char ns_cert_type; /**< Optional Netscape certificate type extension value: See the values in x509.h */
 
+#if defined(MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER)
+    mbedtls_x509_buf subject_key_id;    /**< Optional Subject Key Identifier extension */
+    mbedtls_x509_buf auth_key_id;       /**< Optional Authority Key Identifier extension keyIdentifier field */
+    mbedtls_x509_buf auth_key_serial;   /**< Optional Authority Key Identifier extension authorityCertSerialNumber field */
+#endif
+
     mbedtls_x509_buf sig;               /**< Signature: hash of the tbs part signed with the private key. */
     mbedtls_md_type_t sig_md;           /**< Internal representation of the MD algorithm of the signature algorithm, e.g. MBEDTLS_MD_SHA256 */
     mbedtls_pk_type_t sig_pk;           /**< Internal representation of the Public Key algorithm of the signature algorithm, e.g. MBEDTLS_PK_RSA */

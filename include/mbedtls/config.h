@@ -1309,6 +1309,20 @@
 #define MBEDTLS_X509_CHECK_EXTENDED_KEY_USAGE
 
 /**
+ * \def MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER
+ *
+ * Enable verification of the AuthorityKeyIdentifier.  This allows chains to be
+ * reliably constructed, even if there are multiple intermediate certificate
+ * with the same subject name to choose from.
+ *
+ * This is recommended in the PKIX X.509 profile, and may become the default or
+ * be removed as an option in a future version.
+ *
+ * Uncomment to enable chain construction using AuthorityKeyIdentifiers.
+ */
+//#define MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER
+
+/**
  * \def MBEDTLS_X509_RSASSA_PSS_SUPPORT
  *
  * Enable parsing and verification of X.509 certificates, CRLs and CSRS

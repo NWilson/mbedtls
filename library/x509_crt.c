@@ -513,6 +513,115 @@ static int x509_get_subject_alt_name( unsigned char **p,
     return( 0 );
 }
 
+#if defined(MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER)
+/*
+ * SubjectKeyIdentifier ::= KeyIdentifier
+ *
+ * KeyIdentifier ::= OCTET STRING
+ */
+static int x509_get_subject_key_identifier( unsigned char **p,
+                                            const unsigned char *end,
+                                            mbedtls_x509_buf *subject_key_id )
+{
+    int ret;
+    size_t len;
+
+    if( ( ret = mbedtls_asn1_get_tag( p, end, &len, MBEDTLS_ASN1_OCTET_STRING ) ) != 0 )
+        return( MBEDTLS_ERR_X509_INVALID_EXTENSIONS + ret );
+
+    if( *p + len != end )
+        return( MBEDTLS_ERR_X509_INVALID_EXTENSIONS +
+                MBEDTLS_ERR_ASN1_LENGTH_MISMATCH );
+
+    subject_key_id->tag = MBEDTLS_ASN1_OCTET_STRING;
+    subject_key_id->p = *p;
+    subject_key_id->len = len;
+    *p += len;
+
+    return( 0 );
+}
+
+/*
+ * AuthorityKeyIdentifier ::= SEQUENCE {
+ *     keyIdentifier             [0] KeyIdentifier           OPTIONAL,
+ *     authorityCertIssuer       [1] GeneralNames            OPTIONAL,
+ *     authorityCertSerialNumber [2] CertificateSerialNumber OPTIONAL  }
+ *
+ * KeyIdentifier ::= OCTET STRING
+ */
+static int x509_get_auth_key_identifier( unsigned char **p,
+                                         const unsigned char *end,
+                                         mbedtls_x509_buf *auth_key_id,
+                                         mbedtls_x509_buf *auth_key_serial )
+{
+    int ret, tag, last_tag = -1;
+    size_t len, tag_len;
+
+    if( ( ret = mbedtls_asn1_get_tag( p, end, &len,
+            MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE ) ) != 0 )
+        return( MBEDTLS_ERR_X509_INVALID_EXTENSIONS + ret );
+
+    if( *p + len != end )
+        return( MBEDTLS_ERR_X509_INVALID_EXTENSIONS +
+                MBEDTLS_ERR_ASN1_LENGTH_MISMATCH );
+
+    while( *p < end )
+    {
+        if( ( end - *p ) < 1 )
+            return( MBEDTLS_ERR_X509_INVALID_EXTENSIONS +
+                    MBEDTLS_ERR_ASN1_OUT_OF_DATA );
+
+        tag = **p;
+        (*p)++;
+        if( ( ret = mbedtls_asn1_get_len( p, end, &tag_len ) ) != 0 )
+            return( MBEDTLS_ERR_X509_INVALID_EXTENSIONS + ret );
+
+        if( tag == ( MBEDTLS_ASN1_CONTEXT_SPECIFIC | 0 ) &&
+            ( tag & 0x03 ) > last_tag )
+        {
+            /* keyIdentifier */
+            auth_key_id->tag = MBEDTLS_ASN1_OCTET_STRING;
+            auth_key_id->p = *p;
+            auth_key_id->len = tag_len;
+        }
+        else if( tag == ( MBEDTLS_ASN1_CONTEXT_SPECIFIC | MBEDTLS_ASN1_CONSTRUCTED | 1 ) &&
+                 ( tag & 0x03 ) > last_tag )
+        {
+            /*
+             * authorityCertIssuer - we do nothing with this currently. It
+             * identifies the issuer's issuer, so that when we look for the
+             * parent cert we can check we've found the right one by looking at
+             * its issuer.  In theory, since authorityCertSerialNumber can be a
+             * "small number" we need to check the issuer+serial combination,
+             * but in practice it's not useful, and the field is rarely set.
+             */
+        }
+        else if( tag == ( MBEDTLS_ASN1_CONTEXT_SPECIFIC | 2 ) &&
+                 ( tag & 0x03 ) > last_tag )
+        {
+            /* authorityCertSerialNumber */
+            auth_key_serial->tag = MBEDTLS_ASN1_INTEGER;
+            auth_key_serial->p = *p;
+            auth_key_serial->len = tag_len;
+        }
+        else
+        {
+            return( MBEDTLS_ERR_X509_INVALID_EXTENSIONS +
+                    MBEDTLS_ERR_ASN1_UNEXPECTED_TAG );
+        }
+
+        *p += tag_len;
+        last_tag = tag & 0x03;
+    }
+
+    if( *p != end )
+        return( MBEDTLS_ERR_X509_INVALID_EXTENSIONS +
+                MBEDTLS_ERR_ASN1_LENGTH_MISMATCH );
+
+    return( 0 );
+}
+#endif /* MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER */
+
 /*
  * X.509 v3 extensions
  *
@@ -646,6 +755,28 @@ static int x509_get_crt_ext( unsigned char **p,
                     &crt->ns_cert_type ) ) != 0 )
                 return( ret );
             break;
+
+#if defined(MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER)
+        case MBEDTLS_X509_EXT_SUBJECT_KEY_IDENTIFIER:
+            /* Parse subject key identifier */
+            if( ( ret = x509_get_subject_key_identifier( p, end_ext_octet,
+                    &crt->subject_key_id ) ) != 0 )
+                return( ret );
+            break;
+
+        case MBEDTLS_X509_EXT_AUTHORITY_KEY_IDENTIFIER:
+            /* Parse authority key identifier */
+            if( ( ret = x509_get_auth_key_identifier( p, end_ext_octet,
+                    &crt->auth_key_id, &crt->auth_key_serial ) ) != 0 )
+                return( ret );
+            break;
+#else /* MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER */
+        case MBEDTLS_X509_EXT_SUBJECT_KEY_IDENTIFIER:
+        case MBEDTLS_X509_EXT_AUTHORITY_KEY_IDENTIFIER:
+            *p = end_ext_octet;
+            crt->ext_types &= ~ext_type;
+            break;
+#endif /* MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER */
 
         default:
             return( MBEDTLS_ERR_X509_FEATURE_UNAVAILABLE );
@@ -1456,6 +1587,38 @@ int mbedtls_x509_crt_info( char *buf, size_t size, const char *prefix,
             return( ret );
     }
 
+#if defined(MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER)
+    if( crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_KEY_IDENTIFIER )
+    {
+        ret = mbedtls_snprintf( p, n, "\n%ssubject key id    : ", prefix);
+        MBEDTLS_X509_SAFE_SNPRINTF;
+
+        ret = mbedtls_x509_serial_gets( p, n, &crt->subject_key_id );
+        MBEDTLS_X509_SAFE_SNPRINTF;
+    }
+
+    if( crt->ext_types & MBEDTLS_X509_EXT_AUTHORITY_KEY_IDENTIFIER )
+    {
+        ret = mbedtls_snprintf( p, n, "\n%sauthority key id  : ", prefix);
+        MBEDTLS_X509_SAFE_SNPRINTF;
+        if( crt->auth_key_id.len )
+        {
+            ret = mbedtls_snprintf( p, n, "keyid:" );
+            MBEDTLS_X509_SAFE_SNPRINTF;
+            ret = mbedtls_x509_serial_gets( p, n, &crt->auth_key_id );
+            MBEDTLS_X509_SAFE_SNPRINTF;
+        }
+        if( crt->auth_key_serial.len )
+        {
+            ret = mbedtls_snprintf( p, n, "%sserial:",
+                                     crt->auth_key_id.len ? ", " : "" );
+            MBEDTLS_X509_SAFE_SNPRINTF;
+            ret = mbedtls_x509_serial_gets( p, n, &crt->auth_key_serial );
+            MBEDTLS_X509_SAFE_SNPRINTF;
+        }
+    }
+#endif /* MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER */
+
     ret = mbedtls_snprintf( p, n, "\n" );
     MBEDTLS_X509_SAFE_SNPRINTF;
 
@@ -1828,6 +1991,47 @@ static int x509_name_cmp( const mbedtls_x509_name *a, const mbedtls_x509_name *b
 }
 
 /*
+ * Check if 'parent' is the issuer of 'child'
+ * Retun 0 if yes, -1 if not.
+ */
+static int x509_crt_check_issued_by( const mbedtls_x509_crt *child,
+                                     const mbedtls_x509_crt *parent )
+{
+    /* Parent must be the issuer */
+    if( x509_name_cmp( &child->issuer, &parent->subject ) != 0 )
+        return( -1 );
+
+#if defined(MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER)
+    /*
+     * Also check the AuthorityKeyIdentifier matches if included.  According to
+     * the PKIX X.509 profile, all CAs MUST include this if they conform to the
+     * profile (with the exception of self-signed certificates, which don't need
+     * an AKID).
+     */
+    if( child->ext_types & MBEDTLS_X509_EXT_AUTHORITY_KEY_IDENTIFIER )
+    {
+        if( child->auth_key_id.len )
+        {
+            if ( ! ( parent->ext_types & MBEDTLS_X509_EXT_SUBJECT_KEY_IDENTIFIER ) ||
+                 parent->subject_key_id.len != child->auth_key_id.len ||
+                 memcmp( parent->subject_key_id.p, child->auth_key_id.p,
+                         parent->subject_key_id.len ) != 0 )
+                return( -1 );
+        }
+        if( child->auth_key_serial.len )
+        {
+            if ( parent->serial.len != child->auth_key_serial.len ||
+                 memcmp( parent->serial.p, child->auth_key_serial.p,
+                         parent->serial.len ) != 0 )
+                return( -1 );
+        }
+    }
+#endif
+
+    return( 0 );
+}
+
+/*
  * Check if 'parent' is a suitable parent (signing CA) for 'child'.
  * Return 0 if yes, -1 if not.
  *
@@ -1842,7 +2046,7 @@ static int x509_crt_check_parent( const mbedtls_x509_crt *child,
     int need_ca_bit;
 
     /* Parent must be the issuer */
-    if( x509_name_cmp( &child->issuer, &parent->subject ) != 0 )
+    if( x509_crt_check_issued_by( child, parent ) != 0 )
         return( -1 );
 
     /* Parent must have the basicConstraints CA bit set as a general rule */
@@ -1974,7 +2178,7 @@ static int x509_crt_verify_chain_step(
      * chain from here.
      */
 
-    if( x509_name_cmp( &crt->issuer, &crt->subject ) == 0 )
+    if( x509_crt_check_issued_by( crt, crt ) == 0 )
     {
         for( parent = trust_ca; parent != NULL; parent = parent->next )
         {
