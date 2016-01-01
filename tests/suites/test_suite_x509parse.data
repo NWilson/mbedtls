@@ -707,6 +707,22 @@ X509 Certificate verification #82 (leaf bad key alg)
 depends_on:MBEDTLS_PEM_PARSE_C:MBEDTLS_SHA256_C:MBEDTLS_RSA_C
 mbedtls_x509_crt_verify_chain:"data_files/cert_small_rsa.crt":"data_files/test-ca.crt":MBEDTLS_X509_BADCERT_BAD_PK:"suiteb"
 
+X509 Certificate verification #83 (authority key identifier OK)
+depends_on:MBEDTLS_PEM_PARSE_C:MBEDTLS_SHA256_C:MBEDTLS_RSA_C
+mbedtls_x509_crt_verify_chain:"data_files/cert_akid_leaf.crt":"data_files/cert_akid_root.crt":0:""
+
+X509 Certificate verification #84 (authority key identifier bad serial)
+depends_on:MBEDTLS_PEM_PARSE_C:MBEDTLS_SHA256_C:MBEDTLS_RSA_C:MBEDTLS_X509_CHECK_EXTENDED_KEY_USAGE
+mbedtls_x509_crt_verify_chain:"data_files/cert_akid_leaf_badserial.crt":"data_files/cert_akid_root.crt":MBEDTLS_X509_BADCERT_NOT_TRUSTED:""
+
+X509 Certificate verification #85 (authority key identifier bad issuer)
+depends_on:MBEDTLS_PEM_PARSE_C:MBEDTLS_SHA256_C:MBEDTLS_RSA_C:MBEDTLS_X509_CHECK_EXTENDED_KEY_USAGE
+mbedtls_x509_crt_verify_chain:"data_files/cert_akid_leaf_badissuer.crt":"data_files/cert_akid_root.crt":MBEDTLS_X509_BADCERT_NOT_TRUSTED:""
+
+X509 Certificate verification #86 (authority key identifier bad skid)
+depends_on:MBEDTLS_PEM_PARSE_C:MBEDTLS_SHA256_C:MBEDTLS_RSA_C:MBEDTLS_X509_CHECK_EXTENDED_KEY_USAGE
+mbedtls_x509_crt_verify_chain:"data_files/cert_akid_leaf_badskid.crt":"data_files/cert_akid_root.crt":MBEDTLS_X509_BADCERT_NOT_TRUSTED:""
+
 X509 Certificate verification maxpath checks
 depends_on:MBEDTLS_PEM_PARSE_C:MBEDTLS_SHA256_C:MBEDTLS_RSA_C
 mbedtls_x509_crt_verify_max:"data_files/dir-maxpath/crt":"data_files/dir-maxpath/root.crt"
