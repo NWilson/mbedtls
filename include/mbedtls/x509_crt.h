@@ -87,6 +87,7 @@ typedef struct mbedtls_x509_crt
 #if defined(MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER)
     mbedtls_x509_buf subject_key_id;    /**< Optional Subject Key Identifier extension */
     mbedtls_x509_buf auth_key_id;       /**< Optional Authority Key Identifier extension keyIdentifier field */
+    mbedtls_x509_buf auth_key_issuer;   /**< Optional Authority Key Identifier extension key authorityCertIssuer field */
     mbedtls_x509_buf auth_key_serial;   /**< Optional Authority Key Identifier extension authorityCertSerialNumber field */
 #endif
 

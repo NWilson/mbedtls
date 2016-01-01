@@ -552,6 +552,7 @@ static int x509_get_subject_key_identifier( unsigned char **p,
 static int x509_get_auth_key_identifier( unsigned char **p,
                                          const unsigned char *end,
                                          mbedtls_x509_buf *auth_key_id,
+                                         mbedtls_x509_buf *auth_key_issuer,
                                          mbedtls_x509_buf *auth_key_serial )
 {
     int ret, tag, last_tag = -1;
@@ -587,14 +588,23 @@ static int x509_get_auth_key_identifier( unsigned char **p,
         else if( tag == ( MBEDTLS_ASN1_CONTEXT_SPECIFIC | MBEDTLS_ASN1_CONSTRUCTED | 1 ) &&
                  ( tag & 0x03 ) > last_tag )
         {
-            /*
-             * authorityCertIssuer - we do nothing with this currently. It
-             * identifies the issuer's issuer, so that when we look for the
-             * parent cert we can check we've found the right one by looking at
-             * its issuer.  In theory, since authorityCertSerialNumber can be a
-             * "small number" we need to check the issuer+serial combination,
-             * but in practice it's not useful, and the field is rarely set.
-             */
+            /* authorityCertIssuer.  This one is a bit weird, you'd expect it
+             * to be simply an OPTIONAL DirectoryName, but instead it's a SEQ
+             * of GeneralName.  The only case which has valid semantics is for
+             * there to be a single DirectoryName (tag choice "4"). */
+            auth_key_issuer;
+            if( tag_len == 0 ||
+                **p != ( MBEDTLS_ASN1_CONTEXT_SPECIFIC | MBEDTLS_ASN1_CONSTRUCTED | 4 ) )
+            {
+              /* empty list, or first item in list isn't a DirectoryName - ignore */
+            }
+            else if( (ret = mbedtls_asn1_get_len( ( auth_key_issuer->p = *p + 1,
+                                                    &auth_key_issuer->p ),
+                                                  *p + tag_len,
+                                                  &auth_key_issuer->len ) ) != 0)
+            {
+                return( MBEDTLS_ERR_X509_INVALID_EXTENSIONS + ret );
+            }
         }
         else if( tag == ( MBEDTLS_ASN1_CONTEXT_SPECIFIC | 2 ) &&
                  ( tag & 0x03 ) > last_tag )
@@ -767,7 +777,8 @@ static int x509_get_crt_ext( unsigned char **p,
         case MBEDTLS_X509_EXT_AUTHORITY_KEY_IDENTIFIER:
             /* Parse authority key identifier */
             if( ( ret = x509_get_auth_key_identifier( p, end_ext_octet,
-                    &crt->auth_key_id, &crt->auth_key_serial ) ) != 0 )
+                    &crt->auth_key_id, &crt->auth_key_issuer,
+                    &crt->auth_key_serial ) ) != 0 )
                 return( ret );
             break;
 #else /* MBEDTLS_X509_CHECK_AUTHORITY_KEY_IDENTIFIER */
@@ -1608,10 +1619,17 @@ int mbedtls_x509_crt_info( char *buf, size_t size, const char *prefix,
             ret = mbedtls_x509_serial_gets( p, n, &crt->auth_key_id );
             MBEDTLS_X509_SAFE_SNPRINTF;
         }
+        if( crt->auth_key_issuer.len )
+        {
+            ret = mbedtls_snprintf( p, n, "%sissuer specified",
+                                    crt->auth_key_id.len ? ", " : "");
+            MBEDTLS_X509_SAFE_SNPRINTF;
+        }
         if( crt->auth_key_serial.len )
         {
             ret = mbedtls_snprintf( p, n, "%sserial:",
-                                     crt->auth_key_id.len ? ", " : "" );
+                                    crt->auth_key_id.len || crt->auth_key_issuer.len
+                                        ? ", " : "" );
             MBEDTLS_X509_SAFE_SNPRINTF;
             ret = mbedtls_x509_serial_gets( p, n, &crt->auth_key_serial );
             MBEDTLS_X509_SAFE_SNPRINTF;
@@ -2012,17 +2030,24 @@ static int x509_crt_check_issued_by( const mbedtls_x509_crt *child,
     {
         if( child->auth_key_id.len )
         {
-            if ( ! ( parent->ext_types & MBEDTLS_X509_EXT_SUBJECT_KEY_IDENTIFIER ) ||
-                 parent->subject_key_id.len != child->auth_key_id.len ||
-                 memcmp( parent->subject_key_id.p, child->auth_key_id.p,
-                         parent->subject_key_id.len ) != 0 )
+            if( ! ( parent->ext_types & MBEDTLS_X509_EXT_SUBJECT_KEY_IDENTIFIER ) ||
+                parent->subject_key_id.len != child->auth_key_id.len ||
+                memcmp( parent->subject_key_id.p, child->auth_key_id.p,
+                        parent->subject_key_id.len ) != 0 )
+                return( -1 );
+        }
+        if( child->auth_key_issuer.len )
+        {
+            if( parent->issuer_raw.len != child->auth_key_issuer.len ||
+                memcmp( parent->issuer_raw.p, child->auth_key_issuer.p,
+                        parent->issuer_raw.len ) != 0 )
                 return( -1 );
         }
         if( child->auth_key_serial.len )
         {
-            if ( parent->serial.len != child->auth_key_serial.len ||
-                 memcmp( parent->serial.p, child->auth_key_serial.p,
-                         parent->serial.len ) != 0 )
+            if( parent->serial.len != child->auth_key_serial.len ||
+                memcmp( parent->serial.p, child->auth_key_serial.p,
+                        parent->serial.len ) != 0 )
                 return( -1 );
         }
     }
